@@ -34,13 +34,15 @@ INFO = {'background': '#eff6ff', 'border': '1px solid #bfdbfe',
         'fontSize': '14px', 'lineHeight': '1.7'}
 
 ELECTIONS = {
-    2008: {'label': '2008 — Post-Soviet Transition', 'color': '#7c3aed'},
-    2012: {'label': '2012 — Stability Era',          'color': '#2563eb'},
-    2017: {'label': '2017 — Pre-Revolution',         'color': '#0891b2'},
-    2021: {'label': '2021 — Post-War Recovery',      'color': '#059669'},
+    2008: {'label': '2008', 'color': '#7c3aed'},
+    2012: {'label': '2012', 'color': '#2563eb'},
+    2017: {'label': '2017', 'color': '#0891b2'},
+    2018: {'label': '2018', 'color': '#ea580c'},
+    2021: {'label': '2021', 'color': '#059669'},
 }
 ELEC_STARTS = {2008: '2008-04-01', 2012: '2012-04-01',
-               2017: '2017-04-01', 2021: '2021-06-01'}
+               2017: '2017-04-01', 2018: '2018-12-09',
+               2021: '2021-06-20'}
 
 VAR_LABELS = {
     'dlog_CPI_index': 'Δlog(CPI)',
@@ -71,7 +73,7 @@ T = {
                           'and LSTM to test whether elections predict changes in inflation, '
                           'money supply, and government spending.'),
         'stat_q':        'Quarters of data',      'stat_q_s': '2008 Q1 – 2025 Q4',
-        'stat_e':        'Elections analysed',    'stat_e_s': '2008, 2012, 2017, 2021',
+        'stat_e':        'Elections analysed',    'stat_e_s': '2008, 2012, 2017, 2018, 2021',
         'stat_v':        'Macro variables',       'stat_v_s': 'CPI · M2 · Gov · Rate · Election',
         'stat_m':        'Models compared',       'stat_m_s': 'VAR · XGBoost · LSTM',
         'data_h':        'The Data — What Are We Looking At?',
@@ -167,7 +169,7 @@ T = {
                           'Օգտագործում ենք 2008–2025թթ. եռամսյակային տվյալներ, ընդգրկելով 4 ընտրություն, '
                           'և կիրառում ենք VAR, XGBoost, LSTM մոդելներ։'),
         'stat_q':        'Եռամսյակ',             'stat_q_s': '2008 Ե1 – 2025 Ե4',
-        'stat_e':        'Ուսումնասիրված ընտրություն', 'stat_e_s': '2008, 2012, 2017, 2021',
+        'stat_e':        'Ուսումնասիրված ընտրություն', 'stat_e_s': '2008, 2012, 2017, 2018, 2021',
         'stat_v':        'Մակրո փոփոխական',      'stat_v_s': 'ՍԳԻ · M2 · Պետ.Ծախս · Դրույք · Ընտրություն',
         'stat_m':        'Համեմատված մոդել',      'stat_m_s': 'VAR · XGBoost · LSTM',
         'data_h':        'Տվյալները — ի՞նչ ենք ուսումնասիրում',
@@ -394,6 +396,7 @@ BTN_OFF = {'border': 'none', 'padding': '6px 14px', 'fontWeight': '700',
 
 app.layout = html.Div([
     dcc.Store(id='lang', data='en'),
+    dcc.Download(id='download-data'),
 
     # header
     html.Div([
@@ -512,7 +515,7 @@ def _tab_home(lang):
             html.P(t['about_p2'], style={'color': '#334155', 'lineHeight': '1.8', 'fontSize': '15px'}),
         ),
         html.Div([stat("72", t['stat_q'], t['stat_q_s']),
-                  stat("4",  t['stat_e'], t['stat_e_s']),
+                  stat("5",  t['stat_e'], t['stat_e_s']),
                   stat("5",  t['stat_v'], t['stat_v_s']),
                   stat("3",  t['stat_m'], t['stat_m_s'])],
                  style={'display': 'flex', 'gap': '8px', 'marginBottom': '8px'}),
@@ -591,6 +594,15 @@ def _tab_data(lang):
     t = T[lang]
     return html.Div([
         _section_title("Data Explorer", "Select a variable to explore its history"),
+        html.Div([
+            html.Button("⬇️  Download Cleaned Data (CSV)", id='btn-download',
+                        style={'background': BLUE, 'color': WHITE, 'border': 'none',
+                               'borderRadius': '8px', 'padding': '10px 20px',
+                               'fontSize': '14px', 'fontWeight': '600', 'cursor': 'pointer',
+                               'marginBottom': '20px'}),
+            html.Span(" armenia_quarterly.csv — 72 quarters, 5 variables, ready for analysis",
+                      style={'color': DGRAY, 'fontSize': '13px', 'marginLeft': '12px'}),
+        ]),
         _card(
             _dd('data-var', [{'label': f'{v} — {VAR_DESC[v][0]}', 'value': v} for v in NUMERIC],
                 'CPI_index', label=t['data_select']),
@@ -604,6 +616,15 @@ def _tab_data(lang):
             dcc.Graph(id='data-all', figure=_all_vars_fig()),
         ),
     ])
+
+@app.callback(
+    Output('download-data', 'data'),
+    Input('btn-download', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def download_csv(_n):
+    return dcc.send_data_frame(DATA.to_csv, 'armenia_quarterly.csv')
+
 
 @app.callback(
     Output('data-line',  'figure'),
@@ -679,8 +700,8 @@ def _tab_elec(lang):
         _info(t['elec_info']),
         _card(
             html.Div([
-                _dd('elec-yr', [{'label': f'{yr} — {info["label"]}', 'value': yr}
-                                for yr, info in ELECTIONS.items()], 2008, label=t['elec_yr']),
+                _dd('elec-yr', [{'label': str(yr), 'value': yr}
+                                for yr in ELECTIONS], 2008, label=t['elec_yr']),
                 html.Div(style={'width': '24px'}),
                 _dd('elec-var', [{'label': VAR_DESC[v][0], 'value': v} for v in NUMERIC],
                     'CPI_index', label=t['elec_vr']),
