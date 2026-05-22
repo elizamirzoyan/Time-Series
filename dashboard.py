@@ -18,8 +18,19 @@ from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.api import VAR
 from statsmodels.tsa.stattools import grangercausalitytests
 from statsmodels.tsa.api import VAR
+from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
+
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+    tf.get_logger().setLevel('ERROR')
+    _LSTM_AVAILABLE = True
+except ImportError:
+    _LSTM_AVAILABLE = False
 
 
 # ── palette ──────────────────────────────────────────────────
@@ -215,8 +226,8 @@ T = {
                           'Փոխարենը ՍԳԻ-ն առանձին մոդելավորելու, VAR-ն ուսումնասիրում է ՍԳԻ, '
                           'M2, Պետ. ծախսեր և Տոկոսադրույք — յուրաքանչյուրը կախված բոլոր '
                           'մյուսների անցյալ արժեքներից։'),
-        'box1h': 'Ստացիոնարություն', 'box1p': 'VAR-ն պահանջում է ստացիոնար շարքեր։ Վերցնում ենք Δlog(ՍԳԻ, M2, Ծախս) և Δ(Դրույք)։',
-        'box2h': 'Լագի ընտրություն', 'box2p': 'Ստուգում ենք 1–6 լագ, ընտրում ենք AIC-ն նվազագույնի հասցնողը։',
+        'box1h': 'Ստացիոնարություն', 'box1p': 'VAR-ը պահանջում է ստացիոնար շարքեր։ Վերցնում ենք Δlog(ՍԳԻ, M2, Ծախս) և Δ(Դրույք)։',
+        'box2h': 'Լագի ընտրություն', 'box2p': 'Ստուգում ենք 1–6 լագերը, ընտրում ենք AIC-ն նվազագույնի հասցնողը։',
         'box3h': 'Ընտրությունների dummy', 'box3p': 'Երկուական փոփոխական (1 = ընտրության կամ նախորդ եռամսյակ)։',
         'irf_h':         'Ազդակի Արձագանք (IRF)',
         'irf_sub':       'Ինչպե՞ս է ցնցումն ալիք առաջացնում 8 եռամսյակի ընթացքում',
@@ -330,11 +341,89 @@ def _xgb_forecast(var_data, exog):
     return yte, preds, float(np.sqrt(mean_squared_error(yte, preds)))
 
 
+def _lstm_forecast(var_data, exog):
+    """
+    LSTM forecast for dlog_CPI_index.
+    Architecture: 2-layer LSTM with dropout, trained on look-back sequences of 4 quarters.
+    Falls back to None values if TensorFlow is not installed.
+    """
+    if not _LSTM_AVAILABLE:
+        n_test = len(var_data[var_data.index >= '2022-01-01'])
+        return None, None, float('nan')
+
+    split  = '2022-01-01'
+    target = 'dlog_CPI_index'
+    SEQ    = 4  # look-back window (quarters)
+    N_FEAT = var_data.shape[1] + 1  # +1 for election dummy
+
+    df = var_data.copy()
+    df['ELECTION'] = exog.reindex(df.index).fillna(0)
+    df = df.dropna()
+
+    scaler_X = MinMaxScaler()
+    scaler_y = MinMaxScaler()
+
+    # split raw df first so scalers are fit on training data only (no data leakage)
+    df_train = df[df.index < split]
+    df_test  = df[df.index >= split]
+
+    scaler_X.fit(df_train.values)
+    scaler_y.fit(df_train[[target]].values)
+
+    X_all = scaler_X.transform(df.values)
+    y_all = scaler_y.transform(df[[target]].values)
+
+    # build sequences
+    Xs, ys = [], []
+    for i in range(SEQ, len(X_all)):
+        Xs.append(X_all[i - SEQ:i])
+        ys.append(y_all[i])
+    Xs = np.array(Xs)
+    ys = np.array(ys)
+
+    # align dates (sequences start at index SEQ in df)
+    seq_idx = df.index[SEQ:]
+    train_mask = seq_idx < split
+    test_mask  = seq_idx >= split
+
+    X_tr, y_tr = Xs[train_mask], ys[train_mask]
+    X_te       = Xs[test_mask]
+
+    if len(X_tr) < 8 or len(X_te) == 0:
+        return None, None, float('nan')
+
+    tf.random.set_seed(42)
+    model = Sequential([
+        LSTM(32, return_sequences=True, input_shape=(SEQ, N_FEAT)),
+        Dropout(0.2),
+        LSTM(16, return_sequences=False),
+        Dropout(0.2),
+        Dense(1),
+    ])
+    model.compile(optimizer='adam', loss='mse')
+    es = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+    model.fit(X_tr, y_tr,
+              epochs=200, batch_size=8,
+              validation_split=0.15,
+              callbacks=[es], verbose=0)
+
+    preds_scaled = model.predict(X_te, verbose=0)
+    preds = scaler_y.inverse_transform(preds_scaled).flatten()
+
+    yte  = df.loc[seq_idx[test_mask], target].values
+    # guard against nan in predictions (can occur if model output is extreme)
+    mask = ~(np.isnan(preds) | np.isnan(yte))
+    if mask.sum() == 0:
+        return None, None, float('nan')
+    rmse  = float(np.sqrt(mean_squared_error(yte[mask], preds[mask])))
+    yte_s = df.loc[seq_idx[test_mask], target]   # keep index
+    return yte_s, preds, rmse
 print("Loading data and fitting VAR (~15 s)…")
 DATA                                     = _load()
 FITTED, VAR_DATA, EXOG, IRF, GRANGER_DF = _fit_var(DATA)
 TEST, FC_VAR, RESID_STD                  = _var_forecast(VAR_DATA, EXOG)
 Y_XGB, PREDS_XGB, RMSE_XGB              = _xgb_forecast(VAR_DATA, EXOG)
+Y_LSTM, PREDS_LSTM, RMSE_LSTM           = _lstm_forecast(VAR_DATA, EXOG)
 VAR_COLS  = VAR_DATA.columns.tolist()
 NUMERIC   = ['CPI_index', 'M2', 'GOV_EXP', 'rate']
 ELEC_Q    = DATA[DATA['ELECTION'] == 1].index
@@ -344,6 +433,8 @@ def _rmse(a, b):
     return float(np.sqrt(np.mean((a[m] - b[m])**2)))
 
 RMSE_VAR = _rmse(TEST['dlog_CPI_index'].values, FC_VAR['dlog_CPI_index'].values)
+RMSE_XGB = _rmse(TEST['dlog_CPI_index'].values, PREDS_XGB)
+#RMSE_LSTM = _rmse(TEST['dlog_CPI_index'].values, PREDS_LSTM)
 print("Ready — open http://127.0.0.1:8050\n")
 
 # ── helpers ───────────────────────────────────────────────────
@@ -1010,17 +1101,23 @@ def _fc_line_fig(actual_label='Actual'):
                                  name=f'XGBoost (RMSE={RMSE_XGB:.5f})',
                                  line={'color': GREEN, 'dash': 'dot'}, marker={'size': 4},
                                  hovertemplate='<b>XGBoost</b> %{x|%Y-%m}: %{y:.5f}<extra></extra>'))
+    if PREDS_LSTM is not None:
+        lidx = Y_LSTM.index if Y_LSTM is not None else TEST.index[-len(PREDS_LSTM):]
+        fig.add_trace(go.Scatter(x=lidx, y=PREDS_LSTM, mode='lines+markers',
+                                 name=f'LSTM (RMSE={RMSE_LSTM:.5f})',
+                                 line={'color': '#7c3aed', 'dash': 'dashdot'}, marker={'size': 4, 'symbol': 'diamond'},
+                                 hovertemplate='<b>LSTM</b> %{x|%Y-%m}: %{y:.5f}<extra></extra>'))
     fig.update_layout(xaxis_title='Quarter', yaxis_title='Δlog(CPI)',
                       template='plotly_white', height=380,
                       legend={'orientation': 'h', 'y': -0.2}, hovermode='x unified', margin={'t': 10})
     return fig
 
 def _fc_bar_fig(y_label='RMSE (lower is better)'):
-    labels = ['VAR', 'XGBoost']
-    rmses  = [RMSE_VAR, RMSE_XGB]
+    labels = ['VAR', 'XGBoost', 'LSTM']
+    rmses  = [RMSE_VAR, RMSE_XGB, RMSE_LSTM]
     best_i = int(np.argmin(rmses))
     fig = go.Figure(go.Bar(
-        x=labels, y=rmses, marker_color=[BLUE, GREEN],
+        x=labels, y=rmses, marker_color=[BLUE, GREEN, '#7c3aed'],
         marker_line_color=[GOLD if i == best_i else WHITE for i in range(len(labels))],
         marker_line_width=[3 if i == best_i else 1 for i in range(len(labels))],
         text=[f'{r:.5f}' for r in rmses], textposition='outside',
@@ -1033,8 +1130,8 @@ def _fc_bar_fig(y_label='RMSE (lower is better)'):
 
 def _tab_fc(lang):
     t      = T[lang]
-    rmses  = [RMSE_VAR, RMSE_XGB]
-    best   = ['VAR', 'XGBoost'][int(np.argmin(rmses))]
+    rmses  = [RMSE_VAR, RMSE_XGB, RMSE_LSTM]
+    best   = ['VAR', 'XGBoost', 'LSTM'][int(np.argmin(rmses))]
     return html.Div([
         _section_title(t['fc_h'], t['fc_sub']),
         _card(
@@ -1053,6 +1150,10 @@ def _tab_fc(lang):
                           html.P(t['lstm_d'], style={'fontSize': '13px', 'color': DGRAY, 'marginTop': '6px'})],
                          style={'flex': '1', 'padding': '14px', 'background': '#faf5ff',
                                 'borderRadius': '8px', 'borderTop': '3px solid #7c3aed'}),
+                html.Div([html.Strong("LSTM", style={'color': '#7c3aed'}), _badge(t['badge_dl'], '#7c3aed'),
+                          html.P(t['lstm_d'], style={'fontSize': '13px', 'color': DGRAY, 'marginTop': '6px'})],
+                         style={'flex': '1', 'padding': '14px', 'background': '#faf5ff',
+                                'borderRadius': '8px', 'borderTop': '3px solid #7c3aed'}),                
             ], style={'display': 'flex', 'marginTop': '16px'}),
         ),
         _card(_section_title(t['fc_line_h'], t['fc_line_sub']),
