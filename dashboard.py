@@ -7,13 +7,20 @@ Open: http://127.0.0.1:8050
 
 import pandas as pd
 import numpy as np
-import warnings
-warnings.filterwarnings('ignore')
+
 
 import dash
 from dash import dcc, html, dash_table, Input, Output, ctx
 import plotly.graph_objects as go
 import plotly.express as px
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.api import VAR
+import warnings
+warnings.filterwarnings('ignore')
+
 
 # ── palette ──────────────────────────────────────────────────
 NAVY  = '#0f172a'
@@ -163,10 +170,10 @@ T = {
         'about_p1':      ('Քաղաքական Բիզնես Ցիկլի (ՔԲՑ) տեսությունն ասում է, որ կառավարությունները '
                           'ընտրություններից առաջ շահարկում են տնտեսությունը հաղթելու համար։ '
                           'Ավելացնում են ծախսերը, ընդլայնում դրամական մատակարարումը կամ '
-                          'իջեցնում տոկոսադրույքները — ստեղծելով կարճաժամկետ աճ։ '
+                          'իջեցնում տոկոսադրույքները՝ ստեղծելով կարճաժամկետ աճ։ '
                           'Ընտրություններից հետո հետևում են ուղղումներ՝ գնաճ, խստացում, կրճատումներ։'),
         'about_p2':      ('Այս նախագիծն ուսումնասիրում է՝ արդյո՞ք Հայաստանում ՔԲՑ-ի ապացույցներ կան։ '
-                          'Օգտագործում ենք 2008–2025թթ. եռամսյակային տվյալներ, ընդգրկելով 4 ընտրություն, '
+                          'Օգտագործել ենք 2008–2025թթ. եռամսյակային տվյալներ, ընդգրկելով 4 ընտրություն, '
                           'և կիրառում ենք VAR, XGBoost, LSTM մոդելներ։'),
         'stat_q':        'Եռամսյակ',             'stat_q_s': '2008 Ե1 – 2025 Ե4',
         'stat_e':        'Ուսումնասիրված ընտրություն', 'stat_e_s': '2008, 2012, 2017, 2018, 2021',
@@ -242,7 +249,7 @@ T = {
         'badge_dl':      'Խ. Ուսուցում',
         'var_d':  'Օգտ. չորս մակրո փոփոխականի կապերը։ Մեկնաբանելի գործակիցներ ու վստ. միջակայքներ։',
         'xgb_d':  'Գրադիենտ-ուժ. ծառ՝ 4 լաgrade փոփ.-ից։ Ոչ-գծային ձևեր։',
-        'lstm_d': 'Նյարդային ցանց՝ 4-եռամսյ. հաջ.վ.։ Կարող է ավելի թույլ կատ. ~55 դիտ.–ով։',
+        'lstm_d': 'Նեյրոնային ցանց՝ 4-եռամսյ. հաջ.վ.։ Կարող է ավելի թույլ կատ. ~55 դիտ.–ով։',
     },
 }
 
@@ -268,8 +275,7 @@ def _load():
 
 
 def _fit_var(data):
-    from statsmodels.tsa.api import VAR
-    from statsmodels.tsa.stattools import grangercausalitytests
+
     dm = data.copy()
     for v in ['CPI_index', 'M2', 'GOV_EXP']:
         dm[f'log_{v}']  = np.log(dm[v])
@@ -293,7 +299,6 @@ def _fit_var(data):
 
 
 def _var_forecast(var_data, exog):
-    from statsmodels.tsa.api import VAR
     split     = '2022-01-01'
     train     = var_data[var_data.index < split]
     test      = var_data[var_data.index >= split]
@@ -308,11 +313,7 @@ def _var_forecast(var_data, exog):
 
 
 def _xgb_forecast(var_data, exog):
-    try:
-        import xgboost as xgb
-        from sklearn.metrics import mean_squared_error
-    except ImportError:
-        return None, None, float('nan')
+
     split, target = '2022-01-01', 'dlog_CPI_index'
     df = var_data.copy()
     df['ELECTION'] = exog.reindex(df.index).fillna(0)

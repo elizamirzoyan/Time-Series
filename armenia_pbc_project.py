@@ -12,6 +12,24 @@ import matplotlib.dates as mdates
 import seaborn as sns
 import warnings
 import logging
+from statsmodels.tsa.seasonal import seasonal_decompose
+import datetime as _dt
+import datetime as _dt
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from statsmodels.tsa.vector_ar.vecm import VECM
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.stattools import zivot_andrews
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.stattools import adfuller, kpss
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
+from sklearn.preprocessing import MinMaxScaler
 warnings.filterwarnings('ignore')
 
 # ============================================================
@@ -90,7 +108,6 @@ def load_cpi(path=None):
 
 
 def load_m2(path=None):
-    import datetime as _dt
     path = path or CONFIG['paths']['m2']
     df = pd.read_excel(path, sheet_name=0, header=3)
     df.columns = ['date_serial','Currency','Demand_AMD','M1',
@@ -106,7 +123,8 @@ def load_m2(path=None):
 
 
 def load_rate(path=None):
-    import datetime as _dt
+
+
     path = path or CONFIG['paths']['rate']
     df = pd.read_excel(path, sheet_name=0, header=2)
     df.columns = ['date_serial', 'rate']
@@ -190,7 +208,7 @@ def build_quarterly_dataset():
 # ============================================================
 
 def plot_seasonal_decomposition(data):
-    from statsmodels.tsa.seasonal import seasonal_decompose
+
     series = data['CPI_index'].dropna()
     result = seasonal_decompose(series, model='multiplicative', period=4)
 
@@ -298,9 +316,7 @@ def plot_correlation_heatmap(data):
 
 
 def cluster_election_vs_nonelection(data):
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.cluster import KMeans
-    from sklearn.decomposition import PCA
+
 
     vars_cl  = ['CPI_index', 'M2', 'GOV_EXP', 'rate']
     cl_data  = data[vars_cl].dropna()
@@ -339,7 +355,6 @@ def cluster_election_vs_nonelection(data):
 # STEP 4 — STATIONARITY TESTS
 # ============================================================
 
-from statsmodels.tsa.stattools import adfuller, kpss
 
 def test_stationarity(series, name):
     s = series.dropna()
@@ -382,7 +397,8 @@ def run_stationarity_tests(data):
 
 
 def plot_acf_pacf(data_model):
-    from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+
     vars_diff = ['dlog_CPI_index', 'dlog_M2', 'dlog_GOV_EXP', 'd_rate']
     fig, axes = plt.subplots(len(vars_diff), 2, figsize=(14, 16))
     fig.suptitle('ACF and PACF — Differenced Series', fontsize=14, fontweight='bold')
@@ -401,7 +417,7 @@ def plot_acf_pacf(data_model):
 # ============================================================
 
 def run_structural_break_tests(data_model):
-    from statsmodels.tsa.stattools import zivot_andrews
+
     log.info("="*55 + "\nSTRUCTURAL BREAK — ZIVOT-ANDREWS TEST\n" + "="*55)
 
     series = data_model['dlog_CPI_index'].dropna()
@@ -438,8 +454,7 @@ def run_structural_break_tests(data_model):
 # STEP 5 — VAR MODEL
 # ============================================================
 
-from statsmodels.tsa.api import VAR
-from statsmodels.tsa.stattools import grangercausalitytests
+
 
 
 def build_var_model(data_model):
@@ -557,7 +572,7 @@ def run_hypothesis_tests(fitted, var_data, data_model):
 
     # Johansen cointegration  (item 2 — fully implemented)
     log.info("--- JOHANSEN COINTEGRATION TEST ---")
-    from statsmodels.tsa.vector_ar.vecm import coint_johansen
+
     log_vars = ['log_CPI_index', 'log_M2', 'log_GOV_EXP']
     log_data = data_model[log_vars].dropna()
     joh      = coint_johansen(log_data, det_order=0, k_ar_diff=2)
@@ -591,7 +606,6 @@ def build_vecm_model(data_model, fitted_var, coint_rank):
         log.info("No cointegration — skipping VECM.")
         return None
 
-    from statsmodels.tsa.vector_ar.vecm import VECM
     log.info("="*55 + "\nVECM MODEL\n" + "="*55)
 
     log_vars = ['log_CPI_index', 'log_M2', 'log_GOV_EXP']
@@ -652,8 +666,7 @@ def run_garch_on_residuals(fitted, data):
 # STEP 7 — FORECASTING & ML COMPARISON
 # ============================================================
 
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
-from sklearn.preprocessing import MinMaxScaler
+
 
 
 def forecast_var(fitted, var_data, exog):
@@ -684,7 +697,7 @@ def forecast_var(fitted, var_data, exog):
 
 
 def forecast_xgboost(var_data, exog):
-    import xgboost as xgb
+
     split  = CONFIG['train_test_split']
     target = 'dlog_CPI_index'
     df     = var_data.copy()
@@ -709,8 +722,7 @@ def forecast_xgboost(var_data, exog):
 
 def forecast_lstm(var_data, exog):
     """FIX (item 4): correct inverse transform using per-feature min/max."""
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
+
 
     split  = CONFIG['train_test_split']
     target = 'dlog_CPI_index'
